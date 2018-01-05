@@ -1,4 +1,4 @@
-package com.github.sioncheng.zookeeperPractice.mw;
+package com.github.sioncheng.zp.mw;
 
 import org.apache.log4j.Logger;
 import org.apache.zookeeper.*;
@@ -6,7 +6,9 @@ import org.apache.zookeeper.data.Stat;
 import org.jboss.netty.util.internal.ConcurrentHashMap;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.*;
 
@@ -25,7 +27,7 @@ public class AsyncMaster implements Watcher {
 
         while (true) {
             int ch = System.in.read();
-            if (ch == (byte)'q') {
+            if (ch == (byte) 'q') {
                 break;
             }
         }
@@ -57,6 +59,7 @@ public class AsyncMaster implements Watcher {
     void checkMaster() {
         AsyncCallback.DataCallback dataCallback = new AsyncCallback.DataCallback() {
             public void processResult(int i, String s, Object o, byte[] bytes, Stat stat) {
+                KeeperException.Code code = KeeperException.Code.get(i);
                 switch (KeeperException.Code.get(i)) {
                     case CONNECTIONLOSS:
                         checkMaster();
@@ -71,6 +74,8 @@ public class AsyncMaster implements Watcher {
                     case NONODE:
                         runForMaster();
                         break;
+                    default:
+                        logger.warn(String.format("what happened ? %s", KeeperException.create(code, "/master")));
                 }
             }
         };
@@ -78,7 +83,7 @@ public class AsyncMaster implements Watcher {
         zk.getData("/master", false, dataCallback, null);
     }
 
-    void runForMaster()  {
+    void runForMaster() {
         AsyncCallback.StringCallback stringCallback = new AsyncCallback.StringCallback() {
             public void processResult(int i, String s, Object o, String s1) {
                 switch (KeeperException.Code.get(i)) {
@@ -115,6 +120,7 @@ public class AsyncMaster implements Watcher {
     private void createParent(final String path, final byte[] data) {
         AsyncCallback.StringCallback stringCallback = new AsyncCallback.StringCallback() {
             public void processResult(int i, String s, Object o, String s1) {
+                KeeperException.Code code = KeeperException.Code.get(i);
                 switch (KeeperException.Code.get(i)) {
                     case OK:
                         logger.info(String.format("%s created", path));
@@ -126,7 +132,7 @@ public class AsyncMaster implements Watcher {
                         createParent(path, data);
                         break;
                     default:
-                        logger.error(String.format("%s happened", KeeperException.create(KeeperException.Code.get(i), path)));
+                        logger.error(String.format("%s happened", KeeperException.create(code, path)));
                         break;
                 }
             }
@@ -192,12 +198,23 @@ public class AsyncMaster implements Watcher {
                         break;
                     case OK:
                         //
+                        List<String> goneChildren = new ArrayList<String>();
+                        for (Map.Entry<Integer, String> kv : workers.entrySet()) {
+                            if (children.contains(kv.getValue()) == false) {
+                                goneChildren.add(kv.getValue());
+                            }
+                        }
+
                         workers.clear();
                         workNumber = 0;
                         int i = 0;
                         for (String child : children) {
                             workers.put(i, child);
                             i++;
+                        }
+
+                        for (String child : goneChildren) {
+                            checkUncompletedTasks(child);
                         }
 
                         break;
@@ -207,7 +224,7 @@ public class AsyncMaster implements Watcher {
             }
         };
 
-        zk.getChildren("/workers", watcher, childrenCallback,null);
+        zk.getChildren("/workers", watcher, childrenCallback, null);
     }
 
     void watchTasks() {
@@ -233,7 +250,7 @@ public class AsyncMaster implements Watcher {
                         break;
                     case OK:
                         //
-                        for (String child: children) {
+                        for (String child : children) {
                             logger.info(String.format("going to assign task %s", child));
                             assignTask(child);
                         }
@@ -244,7 +261,7 @@ public class AsyncMaster implements Watcher {
             }
         };
 
-        zk.getChildren("/tasks", watcher, childrenCallback,null);
+        zk.getChildren("/tasks", watcher, childrenCallback, null);
     }
 
     void assignTask(final String task) {
@@ -264,27 +281,7 @@ public class AsyncMaster implements Watcher {
 
                         final String worker = workers.get(workerI);
 
-                        final StringCallback stringCallback = new StringCallback() {
-                            public void processResult(int rc2, String path2, Object ctx2, String name2) {
-                                KeeperException.Code code2 = KeeperException.Code.get(rc2);
-                                switch (code2) {
-                                    case OK:
-                                        logger.info(String.format("assigned task %s", path2));
-                                        break;
-                                    case CONNECTIONLOSS:
-                                        assignTask(task);
-                                        break;
-                                    default:
-                                        logger.error(String.format("what happened %s", KeeperException.create(code2, path2)));
-                                        break;
-                                }
-                            }
-                        };
-
-                        zk.create(String.format("/assign/%s/task-", worker)
-                                , data
-                                , OPEN_ACL_UNSAFE
-                                , CreateMode.PERSISTENT_SEQUENTIAL, stringCallback, data);
+                        assignTaskToWorker(worker, data);
 
                         break;
                     case CONNECTIONLOSS:
@@ -301,12 +298,86 @@ public class AsyncMaster implements Watcher {
 
     }
 
+    void assignTaskToWorker(final String worker, final byte[] data) {
+        final AsyncCallback.StringCallback stringCallback = new AsyncCallback.StringCallback() {
+            public void processResult(int rc2, String path2, Object ctx2, String name2) {
+                KeeperException.Code code2 = KeeperException.Code.get(rc2);
+                switch (code2) {
+                    case OK:
+                        logger.info(String.format("assigned task %s", path2));
+                        break;
+                    case CONNECTIONLOSS:
+                        assignTaskToWorker(worker, data);
+                        break;
+                    default:
+                        logger.error(String.format("what happened %s", KeeperException.create(code2, path2)));
+                        break;
+                }
+            }
+        };
+
+        zk.create(String.format("/assign/%s/task-", worker)
+                , data
+                , OPEN_ACL_UNSAFE
+                , CreateMode.PERSISTENT_SEQUENTIAL, stringCallback, data);
+    }
+
+    void checkUncompletedTasks(final String worker) {
+        final String assignPath = String.format("/assign/%s", worker);
+
+        Watcher getChildrenWatcher = new Watcher() {
+            public void process(WatchedEvent watchedEvent) {
+                logger.info(watchedEvent.getPath());
+            }
+        };
+
+        AsyncCallback.ChildrenCallback getChildrenCallback = new AsyncCallback.ChildrenCallback() {
+            public void processResult(int i, String s, Object o, List<String> list) {
+                KeeperException.Code code = KeeperException.Code.get(i);
+                switch (code) {
+                    case OK:
+                        //
+                        for (String taskId :
+                                list) {
+                            reassignTask(worker, taskId);
+                        }
+                        break;
+                    case CONNECTIONLOSS:
+                        checkUncompletedTasks(worker);
+                        break;
+                    default:
+                        logger.error(String.format("what happened %s", KeeperException.create(code, assignPath)));
+                        break;
+                }
+            }
+        };
+
+        zk.getChildren(assignPath, getChildrenWatcher, getChildrenCallback, null);
+    }
+
+    void reassignTask(final String worker, String assignedTaskId) {
+        final String taskPath = String.format("/assign/%s/%s", worker, assignedTaskId);
+
+        AsyncCallback.DataCallback dataCallback = new AsyncCallback.DataCallback() {
+            public void processResult(int i, String s, Object o, byte[] bytes, Stat stat) {
+                KeeperException.Code code = KeeperException.Code.get(i);
+                switch (code) {
+                    case OK:
+                        assignTaskToWorker(worker, bytes);
+                        break;
+                }
+            }
+        };
+
+        zk.getData(taskPath, false, dataCallback, taskPath);
+    }
+
     private String connectionString;
     private ZooKeeper zk;
     private String serverId;
     private Executor executor;
     private volatile int workNumber;
-    private ConcurrentHashMap<Integer,String> workers;
+    private ConcurrentHashMap<Integer, String> workers;
     private volatile boolean isLeader;
 
     private static final int timeout = 15000;
