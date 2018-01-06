@@ -7,7 +7,9 @@ package com.github.sioncheng.zp.mw;
  */
 public class Task {
 
-    public Task(){}
+    public Task(){
+        stringExpress = null;
+    }
 
     public String getUuid() {
         return uuid;
@@ -41,8 +43,43 @@ public class Task {
         this.rightNumber = rightNumber;
     }
 
+    @Override
+    public String toString() {
+        if (stringExpress ==  null) {
+            stringExpress = String.format("%d %s %d", this.leftNumber, this.operation, this.rightNumber);
+        }
+
+        return stringExpress;
+    }
+
+    @Override
+    public int hashCode() {
+        return toString().hashCode();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (null == obj) {
+            return false;
+        }
+
+        if (obj instanceof Task == false) {
+            return false;
+        }
+
+        if (obj == this) {
+            return true;
+        }
+
+        Task that = (Task)obj;
+
+        return this.hashCode() == that.hashCode();
+    }
+
     private String uuid;
     private int leftNumber;
     private String operation;
     private int rightNumber;
+
+    private String stringExpress;
 }

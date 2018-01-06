@@ -37,13 +37,13 @@ public class Client {
     }
 
     static void parseAndCreateTask(Client c, String s) {
-        Task task = TaskSerializer.parseTask(s);
+        Task task = TaskUtil.parseTask(s);
         if (task == null) {
             logger.warn(String.format("can parse task %s", s));
             return;
         }
 
-        c.createTask(TaskSerializer.serializeTask(task));
+        c.createTask(TaskUtil.serializeTask(task));
     }
 
     public Client(String hostPort) {
@@ -67,11 +67,6 @@ public class Client {
         if (zk != null) {
             zk.close();
         }
-    }
-
-    void sendTask(Task task) {
-        byte[] data = TaskSerializer.serializeTask(task);
-        createTask(data);
     }
 
     void createTask(final byte[] data) {
