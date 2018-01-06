@@ -105,7 +105,7 @@ public class Client {
         Watcher watcher = new Watcher() {
             public void process(WatchedEvent watchedEvent) {
                 if (watchedEvent.getType() == Event.EventType.NodeCreated) {
-                    getTaskResult(statusPath);
+                    getTaskResult(statusPath, uuid);
                 }
             }
         };
@@ -136,7 +136,7 @@ public class Client {
         zk.exists(statusPath, watcher, statCallback, uuid);
     }
 
-    void getTaskResult(final String statusPath) {
+    void getTaskResult(final String statusPath, final String uuid) {
 
         AsyncCallback.DataCallback cb = new AsyncCallback.DataCallback() {
             public void processResult(int i, String s, Object o, byte[] bytes, final Stat stat) {
@@ -146,11 +146,12 @@ public class Client {
                         //
                         TaskResult taskResult = TaskUtil.deserializeTaskResult(bytes);
                         logger.info(String.format("task result %s", taskResult));
+                        clean(uuid);
                         break;
                     case CONNECTIONLOSS:
                         Runnable runnable = new Runnable() {
                             public void run() {
-                                getTaskResult(statusPath);
+                                getTaskResult(statusPath, uuid);
                             }
                         };
 
@@ -163,6 +164,31 @@ public class Client {
         };
 
         zk.getData(statusPath,false, cb,null);
+    }
+
+    void clean(final String uuid) {
+        deletePath(String.format("/tasks/%s", uuid));
+        deletePath(String.format("/status/%s", uuid));
+    }
+
+    void deletePath(final String path) {
+        AsyncCallback.VoidCallback voidCallback = new AsyncCallback.VoidCallback() {
+            public void processResult(int i, String s, Object o) {
+                KeeperException.Code code = KeeperException.Code.get(i);
+                switch (code) {
+                    case OK:
+                        //
+                        break;
+                    case CONNECTIONLOSS:
+                        deletePath(path);
+                        break;
+                    default:
+                        logger.error(String.format("what happened ? %s", KeeperException.create(code, path)));
+                        break;
+                }
+            }
+        };
+        zk.delete(path, -1, voidCallback, null);
     }
 
     private String hostPort;

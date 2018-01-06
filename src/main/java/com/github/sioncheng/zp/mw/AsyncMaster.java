@@ -221,6 +221,7 @@ public class AsyncMaster implements Watcher {
 
                         if (workers.size() > 0) {
                             watchTasks();
+                            checkGoneWorkers();
                         } else {
                             logger.warn("there is no worker now.");
 
@@ -239,8 +240,13 @@ public class AsyncMaster implements Watcher {
                             executor.execute(runnable);
                         }
 
+
                         for (String child : goneChildren) {
-                            checkUncompletedTasks(child, workers.size() > 0);
+                            if (workers.size() > 0) {
+                                reassignTaskUnderGoneworker(child);
+                            } else {
+                                markGoneworker(child);
+                            }
                         }
 
                         break;
@@ -326,63 +332,118 @@ public class AsyncMaster implements Watcher {
                 , CreateMode.PERSISTENT, stringCallback, data);
     }
 
-    void checkUncompletedTasks(final String goneWorker, final boolean hasNewWorkers) {
-        if (hasNewWorkers) {
-            final String assignPath = String.format("/assign/%s", goneWorker);
 
-            Watcher getChildrenWatcher = new Watcher() {
-                public void process(WatchedEvent watchedEvent) {
-                    logger.info(watchedEvent.getPath());
-                }
-            };
+    void reassignTaskUnderGoneworker(final String goneWorker) {
+        final String assignPath = String.format("/assign/%s", goneWorker);
 
-            AsyncCallback.ChildrenCallback getChildrenCallback = new AsyncCallback.ChildrenCallback() {
-                public void processResult(int i, String s, Object o, List<String> list) {
-                    KeeperException.Code code = KeeperException.Code.get(i);
-                    switch (code) {
-                        case OK:
-                            //
-                            for (String taskId :
-                                    list) {
-                                assignTask(taskId);
-                            }
-                            break;
-                        case CONNECTIONLOSS:
-                            checkUncompletedTasks(goneWorker, hasNewWorkers);
-                            break;
-                        default:
-                            logger.error(String.format("what happened %s", KeeperException.create(code, assignPath)));
-                            break;
-                    }
-                }
-            };
+        Watcher getChildrenWatcher = new Watcher() {
+            public void process(WatchedEvent watchedEvent) {
+                logger.info(watchedEvent.getPath());
+            }
+        };
 
-            zk.getChildren(assignPath, getChildrenWatcher, getChildrenCallback, null);
-        } else {
-            AsyncCallback.StringCallback stringCallback = new AsyncCallback.StringCallback() {
-                public void processResult(int i, String s, Object o, String s1) {
-                    KeeperException.Code code = KeeperException.Code.get(i);
-                    switch (code) {
-                        case OK:
-                            //
-                            break;
-                        case CONNECTIONLOSS:
-                            checkUncompletedTasks(goneWorker, hasNewWorkers);
-                            break;
-                        default:
-                            logger.error(String.format("what happened %s", KeeperException.create(code, s)));
-                            break;
-                    }
+        AsyncCallback.ChildrenCallback getChildrenCallback = new AsyncCallback.ChildrenCallback() {
+            public void processResult(int i, String s, Object o, List<String> list) {
+                KeeperException.Code code = KeeperException.Code.get(i);
+                switch (code) {
+                    case OK:
+                        //
+                        for (String taskId :
+                                list) {
+                            assignTask(taskId);
+                        }
+                        break;
+                    case CONNECTIONLOSS:
+                        reassignTaskUnderGoneworker(goneWorker);
+                        break;
+                    default:
+                        logger.error(String.format("what happened %s", KeeperException.create(code, assignPath)));
+                        break;
                 }
-            };
-            zk.create(String.format("/goneWorkers/%s", goneWorker)
-                    , "".getBytes()
-                    , OPEN_ACL_UNSAFE
-                    , CreateMode.PERSISTENT
-                    , stringCallback
-                    , null);
-        }
+            }
+        };
+
+        zk.getChildren(assignPath, getChildrenWatcher, getChildrenCallback, null);
     }
+
+    void markGoneworker(final String goneWorker) {
+        AsyncCallback.StringCallback stringCallback = new AsyncCallback.StringCallback() {
+            public void processResult(int i, String s, Object o, String s1) {
+                KeeperException.Code code = KeeperException.Code.get(i);
+                switch (code) {
+                    case OK:
+                        //
+                        break;
+                    case CONNECTIONLOSS:
+                        markGoneworker(goneWorker);
+                        break;
+                    default:
+                        logger.error(String.format("what happened %s", KeeperException.create(code, s)));
+                        break;
+                }
+            }
+        };
+        zk.create(String.format("/goneWorkers/%s", goneWorker)
+                , "".getBytes()
+                , OPEN_ACL_UNSAFE
+                , CreateMode.PERSISTENT
+                , stringCallback
+                , null);
+    }
+
+    void checkGoneWorkers() {
+        Watcher watcher = new Watcher() {
+            public void process(WatchedEvent watchedEvent) {
+
+            }
+        };
+
+        AsyncCallback.ChildrenCallback childrenCallback = new AsyncCallback.ChildrenCallback() {
+            public void processResult(int i, String s, Object o, List<String> list) {
+                KeeperException.Code code = KeeperException.Code.get(i);
+                switch (code) {
+                    case OK:
+                        for (String child : list) {
+                            logger.info(String.format("going to reassign task under worker %s", child));
+                            if (workers.size() > 0) {
+                                reassignTaskUnderGoneworker(child);
+                                removeGoneworkerMark(child);
+                            }
+                        }
+                        break;
+                    case CONNECTIONLOSS:
+                        checkGoneWorkers();
+                        break;
+                    default:
+                        logger.error(String.format("what happened %s", KeeperException.create(code, s)));
+                        break;
+                }
+            }
+        };
+
+        zk.getChildren("/goneWorkers", watcher, childrenCallback, null);
+    }
+
+    void removeGoneworkerMark(final String goneWorker) {
+        zk.delete(String.format("/goneWorkers/%s", goneWorker), -1, new AsyncCallback.VoidCallback() {
+            public void processResult(int i, String s, Object o) {
+                KeeperException.Code code = KeeperException.Code.get(i);
+                switch (code) {
+                    case OK:
+                        //
+                        logger.info(String.format("removed %s", goneWorker));
+                        break;
+                    case CONNECTIONLOSS:
+                        removeGoneworkerMark(goneWorker);
+                        break;
+                    default:
+                        logger.error(String.format("what happened %s", KeeperException.create(code, s)));
+                        break;
+                }
+            }
+        }, null);
+    }
+
 
     private String connectionString;
     private ZooKeeper zk;
