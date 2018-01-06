@@ -22,7 +22,18 @@ public class TaskResult {
         this.result = result;
     }
 
+    @Override
+    public String toString() {
+        if (null == stringExpress) {
+            stringExpress = task.toString() + " = " + Integer.toString(result);
+        }
+
+        return stringExpress;
+    }
+
     private Task task;
 
     private int result;
+
+    private String stringExpress;
 }
